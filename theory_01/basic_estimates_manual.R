@@ -4,7 +4,8 @@ data(Georgia)
 names(Gedu.df)
 head(Gedu.df)
 
-# ----- function -----
+# ========== function ==========
+# ----- basic estimate -----
 grid <- function(x, nrow, y, ncol){
   x_seq <- seq(
     from = min(x),
@@ -91,7 +92,57 @@ gwr_grid <- function(X, y, obs, grid, bw){
   return(result)
 }
 
-# ----- main -----
+# ----- AICc comparison -----
+calc_gwr_aicc <- function(X, y, obs, bw){
+  D <- calc_distance_matrix(obs, obs)
+  
+  n <- nrow(X)
+  y_hat <- numeric(n)
+  tr_S <- 0
+  for (i in 1:n){
+    # y_hat
+    w_i <- bisquare_adaptive_weight(D[i, ], bw)
+    beta_i <- local_lwr(X, y, w_i)
+    y_hat[i] <- X[i, ,drop=FALSE] %*%beta_i
+    
+    # trace(S)
+    W_i <- diag(as.vector(w_i))
+    s_i <- X[i, ,drop=FALSE] %*% solve(t(X) %*% W_i %*% X) %*% t(X) %*% W_i # row i of S
+    tr_S <- tr_S + s_i[1, i]
+  }
+  
+  # sigma_hat for AICc
+  res <- as.vector(y) - y_hat
+  RSS <- sum(res^2)
+  sigma_hat <- sqrt(RSS / n)
+  
+  # AICc
+  aicc <- 2*n*log(sigma_hat) + n*log(2 * pi) + n*((n + tr_S)/(n - 2 - tr_S))
+  return(aicc)
+}
+
+select_bw_aicc <- function(X, y, obs, bw_canditates){
+  aicc_table <- data.frame(
+    bw = bw_canditates,
+    aicc = NA
+  )
+  
+  for (k in 1:length(bw_canditates)){
+    bw_k <- bw_canditates[k]
+    result_k <- calc_gwr_aicc(X=X, y=y, obs=obs, bw=bw_k)
+    
+    aicc_table$aicc[k] <- result_k
+  }
+  
+  min_aicc <- aicc_table[which.min(aicc_table$aicc), ]
+  
+  return(list(
+    all_results = aicc_table,
+    best = min_aicc
+  ))
+}
+
+# ========== main ==========
 # prepare variable: n, x, y, obs_xy, grid_xy, bw, distance matrix
 n <- nrow(Gedu.df)
 y <- Gedu.df$PctBach
@@ -109,14 +160,16 @@ grid_xy <- matrix(
   c(grid_df$X, grid_df$Y),
   ncol = 2
 )
-bw <- 136
+
+bw_canditates <- seq(130, 140, by=1)
+bw <- select_bw_aicc(X=X, y=y, obs=obs_xy, bw_canditates=bw_canditates)$best$bw
 
 # run
 gwr_result <- gwr_grid(X=X, y=y, obs=obs_xy, grid=grid_xy, bw=bw)
 names(gwr_result)
 head(gwr_result)
 
-# ----- compare with GWmodel -----
+# ----- compare with GWmodel (must run package version first) -----
 coef_names <- c(
   "Intercept",
   "PctRural",
