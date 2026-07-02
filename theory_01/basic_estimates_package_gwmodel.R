@@ -7,7 +7,6 @@ library(sp)
 # Georgia census data set (GWmodel doc. p.16) 
 # transform data set to spdf
 data(Georgia) 
-
 coords <- cbind(Gedu.df$X, Gedu.df$Y)
 georgia_spdf <- SpatialPointsDataFrame(
   coords = coords,
