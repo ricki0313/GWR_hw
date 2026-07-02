@@ -169,7 +169,7 @@ gwr_result <- gwr_grid(X=X, y=y, obs=obs_xy, grid=grid_xy, bw=bw)
 names(gwr_result)
 head(gwr_result)
 
-# ----- compare with GWmodel (must run package version first) -----
+# ========== compare with GWmodel (must run package version first) ==========
 coef_names <- c(
   "Intercept",
   "PctRural",
