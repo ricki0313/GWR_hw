@@ -81,6 +81,19 @@ gwr_grid <- function(X, y, obs, grid, bw){
     beta_mat[i, ] <- as.vector(beta_i)
   }
   
+  # standard deviation of each coefficient
+  coef_sd <- numeric(k)
+  for (i in 1:k){
+    beta_bar <- mean(beta_mat[, i])
+    
+    ss <- 0
+    for (j in 1:m){
+      ss <- ss + (beta_mat[j, i] - beta_bar)^2
+    }
+    coef_sd[i] <- sqrt(ss / (m - 1))
+  }
+  names(coef_sd) <- colnames(X)
+  
   # combine grid & coefficient
   result <- data.frame(
     id = 1:m,
@@ -89,7 +102,10 @@ gwr_grid <- function(X, y, obs, grid, bw){
     beta_mat
   )
   
-  return(result)
+  return(list(
+    coef_estimates = result,
+    coef_sd = coef_sd
+  ))
 }
 
 # ----- AICc comparison -----
@@ -121,14 +137,14 @@ calc_gwr_aicc <- function(X, y, obs, bw){
   return(aicc)
 }
 
-select_bw_aicc <- function(X, y, obs, bw_canditates){
+select_bw_aicc <- function(X, y, obs, bw_candidates){
   aicc_table <- data.frame(
-    bw = bw_canditates,
+    bw = bw_candidates,
     aicc = NA
   )
   
-  for (k in 1:length(bw_canditates)){
-    bw_k <- bw_canditates[k]
+  for (k in 1:length(bw_candidates)){
+    bw_k <- bw_candidates[k]
     result_k <- calc_gwr_aicc(X=X, y=y, obs=obs, bw=bw_k)
     
     aicc_table$aicc[k] <- result_k
@@ -140,6 +156,35 @@ select_bw_aicc <- function(X, y, obs, bw_canditates){
     all_results = aicc_table,
     best = min_aicc
   ))
+}
+
+# ----- Monte Carlo permutation test -----
+mc_per <- function(X, y, obs, bw, sims, seed=123){
+  set.seed(seed)
+  sd_ori <- gwr_grid(X=X, y=y, obs=obs, grid=obs, bw)$coef_sd
+  k <- length(sd_ori)
+  
+  # whether simulation std. is larger than original std.
+  larger_than_ori <- matrix(NA, nrow=sims, ncol=k)
+  colnames(larger_than_ori) <- names(sd_ori) 
+  
+  # std. of random location beta
+  sd_rand_mat <- matrix(NA, nrow=sims, ncol=k)
+  colnames(sd_rand_mat) <- names(sd_ori)
+  
+  for (i in 1:sims){
+    # permutation
+    obs_rand <- obs[sample(1:nrow(obs)), ]
+    
+    # std. of randomized beta
+    sd_rand <- gwr_grid(X=X, y=y, obs=obs_rand, grid=obs_rand, bw)$coef_sd
+    sd_rand_mat[i, ] <- sd_rand
+  }
+  
+  # calculate p-value
+  pv <- colMeans(sd_rand_mat >= matrix(sd_ori, nrow=sims, ncol=k, byrow=TRUE))
+  
+  return(pv)
 }
 
 # ========== main ==========
@@ -161,13 +206,16 @@ grid_xy <- matrix(
   ncol = 2
 )
 
-bw_canditates <- seq(130, 140, by=1)
-bw <- select_bw_aicc(X=X, y=y, obs=obs_xy, bw_canditates=bw_canditates)$best$bw
+bw_candidates <- seq(130, 140, by=1)
+bw <- select_bw_aicc(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
 
 # run
 gwr_result <- gwr_grid(X=X, y=y, obs=obs_xy, grid=grid_xy, bw=bw)
-names(gwr_result)
-head(gwr_result)
+names(gwr_result$coef_estimates)
+head(gwr_result$coef_estimates)
+
+p_value_mc <- mc_per(X=X, y=y, obs=obs_xy, bw=bw, sims=1000)
+p_value_mc
 
 # ========== compare with GWmodel (must run package version first) ==========
 coef_names <- c(
@@ -179,7 +227,7 @@ coef_names <- c(
   "PctBlack"
 )
 
-diff_result <- gwr_result[, coef_names] - grid_basic_estimates[, coef_names]
+diff_result <- gwr_result$coef_estimates[, coef_names] - grid_basic_estimates[, coef_names]
 head(diff_result)
 summary(diff_result)
 max(abs(as.matrix(diff_result)))

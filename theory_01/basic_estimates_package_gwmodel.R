@@ -64,7 +64,7 @@ gwr_basic <- gwr.basic(
   regression.points = grid.spdf,
   bw = bw_aicc,
   kernel = "bisquare",
-  adaptive = TRUE,
+  adaptive = TRUE
 )
 names(gwr_basic$SDF@data)
 head(gwr_basic$SDF@data)
@@ -78,3 +78,12 @@ grid_basic_estimates <- data.frame(
 )
 
 head(grid_basic_estimates)
+
+# Monte Carlo permutation test
+set.seed(123)
+mc <- gwr.montecarlo(formula=formula_gwr, 
+                     data=georgia_spdf, 
+                     nsims=1000, 
+                     kernel="bisquare",
+                     adaptive=TRUE,
+                     bw=bw_aicc)

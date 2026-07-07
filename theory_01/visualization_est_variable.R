@@ -17,12 +17,12 @@ coef_names <- c(
 )
 
 # Unique grid coordinates
-x_unique <- sort(unique(gwr_result$x_coord))
-y_unique <- sort(unique(gwr_result$y_coord))
+x_unique <- sort(unique(gwr_result$coef_estimates$x_coord))
+y_unique <- sort(unique(gwr_result$coef_estimates$y_coord))
 
 # Build SpatialPoints for grid
 grid_points <- SpatialPoints(
-  coords = gwr_result[, c("x_coord", "y_coord")],
+  coords = gwr_result$coef_estimates[, c("x_coord", "y_coord")],
   proj4string = CRS(proj4string(Gedu.counties))
 )
 
@@ -44,7 +44,7 @@ par(
 for (coef_name in coef_names) {
   
   # Mask coefficient values outside Georgia
-  coef_value <- gwr_result[[coef_name]]
+  coef_value <- gwr_result$coef_estimates[[coef_name]]
   coef_value_masked <- coef_value
   coef_value_masked[!inside] <- NA
   
