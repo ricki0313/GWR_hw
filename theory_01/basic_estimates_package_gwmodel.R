@@ -19,7 +19,16 @@ head(georgia_spdf)
 # choose variable (GWR ref. p.97 table 4.5)
 formula_gwr <- PctBach ~ PctRural + PctEld + PctFB + PctPov + PctBlack
 
-# find the best bandwidth (min. AICc)
+# find the best bandwidth (CV, AICc)
+bw_cv <- bw.gwr(
+  formula = formula_gwr,
+  data = georgia_spdf,
+  approach = "CV",
+  kernel = "bisquare",
+  adaptive = TRUE
+)
+bw_cv
+
 bw_aicc <- bw.gwr(
   formula = formula_gwr,
   data = georgia_spdf,
@@ -28,6 +37,7 @@ bw_aicc <- bw.gwr(
   adaptive = TRUE
 )
 bw_aicc
+
 
 # fit model with the best bandwidth
 x_seq <- seq(

@@ -4,8 +4,10 @@ data(Georgia)
 names(Gedu.df)
 head(Gedu.df)
 
-# ========== function ==========
-# ----- basic estimate -----
+# ============================================================
+# Basic estimate 
+# ============================================================
+# ---------- helper functions ----------
 grid <- function(x, nrow, y, ncol){
   x_seq <- seq(
     from = min(x),
@@ -64,6 +66,7 @@ local_lwr <- function(X, y, w){
   return (beta_hat)
 }
 
+# ---------- main GWR estimation functions ----------
 gwr_grid <- function(X, y, obs, grid, bw){
   m <- nrow(grid)
   k <- ncol(X)
@@ -108,7 +111,10 @@ gwr_grid <- function(X, y, obs, grid, bw){
   ))
 }
 
-# ----- AICc comparison -----
+# ============================================================
+# bandwidth selection
+# ============================================================
+# ---------- aicc ----------
 calc_gwr_aicc <- function(X, y, obs, bw){
   D <- calc_distance_matrix(obs, obs)
   
@@ -119,7 +125,7 @@ calc_gwr_aicc <- function(X, y, obs, bw){
     # y_hat
     w_i <- bisquare_adaptive_weight(D[i, ], bw)
     beta_i <- local_lwr(X, y, w_i)
-    y_hat[i] <- X[i, ,drop=FALSE] %*%beta_i
+    y_hat[i] <- X[i, ,drop=FALSE] %*% beta_i
     
     # trace(S)
     W_i <- diag(as.vector(w_i))
@@ -158,7 +164,71 @@ select_bw_aicc <- function(X, y, obs, bw_candidates){
   ))
 }
 
-# ----- Monte Carlo permutation test -----
+# ---------- cv ----------
+calc_gwr_cv <- function(X, y, obs, bw){
+  D <- calc_distance_matrix(obs, obs)
+  n <- nrow(X)
+  y_hat <- numeric(n)
+  for(i in 1:n){
+    w_i <- bisquare_adaptive_weight(D[i, ], bw)
+    
+    # leave one out
+    w_i[i] <- 0
+    
+    # fit
+    beta_i <- local_lwr(X, y, w_i)
+    y_hat[i] <- X[i, ,drop=FALSE] %*% beta_i
+  }
+  cv <- sum((as.vector(y) - y_hat)^2)
+  
+  return(cv)
+}
+
+select_bw_cv <- function(X, y, obs, bw_candidates){
+  cv_table <- data.frame(
+    bw = bw_candidates,
+    cv = NA
+  )
+  for (k in seq_along(bw_candidates)){
+    bw_k <- bw_candidates[k]
+    cv_k <- calc_gwr_cv(X=X, y=y, obs=obs, bw=bw_k)
+    cv_table$cv[k] <- cv_k
+  }
+  
+  min_cv <- cv_table[which.min(cv_table$cv), ]
+  
+  return(list(
+    all_results = cv_table,
+    best = min_cv
+  ))
+}
+
+# ---------- gcv ----------
+calc_gwr_gcv <- function(X, y, obs, bw){
+  D <- calc_distance_matrix(obs, obs)
+  
+  n <- nrow(X)
+  y_hat <- numeric(n)
+  tr_S <- 0
+  for (i in 1:n){
+    # y_hat
+    w_i <- bisquare_adaptive_weight(D[i, ], bw)
+    beta_i <- local_lwr(X, y, w_i)
+    y_hat[i] <- X[i, ,drop=FALSE] %*% beta_i
+    
+    # trace(S)
+    W_i <- diag(as.vector(w_i))
+    s_i <- X[i, ,drop=FALSE] %*% solve(t(X) %*% W_i %*% X) %*% t(X) %*% W_i # row i of S
+    tr_S <- tr_S + s_i[1, i]
+  }
+  gcv <- n * (as.vector(y) - y_hat)^2 / (n - tr_S)^2
+  
+  return(gcv)
+}
+
+# ============================================================
+# Monte Carlo permutation test 
+# ============================================================
 mc_per <- function(X, y, obs, bw, sims, seed=123){
   set.seed(seed)
   sd_ori <- gwr_grid(X=X, y=y, obs=obs, grid=obs, bw)$coef_sd
@@ -187,7 +257,9 @@ mc_per <- function(X, y, obs, bw, sims, seed=123){
   return(pv)
 }
 
-# ========== main ==========
+# ============================================================
+# main 
+# ============================================================
 # prepare variable: n, x, y, obs_xy, grid_xy, bw, distance matrix
 n <- nrow(Gedu.df)
 y <- Gedu.df$PctBach
@@ -206,8 +278,10 @@ grid_xy <- matrix(
   ncol = 2
 )
 
-bw_candidates <- seq(130, 140, by=1)
-bw <- select_bw_aicc(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
+bw_candidates <- seq(130, 145, by=1)
+bw_aicc <- select_bw_aicc(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
+bw_cv <- select_bw_cv(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
+
 
 # run
 gwr_result <- gwr_grid(X=X, y=y, obs=obs_xy, grid=grid_xy, bw=bw)
