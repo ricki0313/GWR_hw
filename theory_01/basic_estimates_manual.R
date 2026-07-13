@@ -135,6 +135,81 @@ calc_leung_f3 <- function(X, y, beta_mat, B_list, L){
   ))
 }
 
+calc_leung_f3_package <- function(X, y, beta_mat, B_list, L){
+  n <- nrow(X)
+  p <- ncol(X)
+  
+  I <- diag(n)
+  J <- matrix(1, nrow = n, ncol = n)
+  C <- I - J / n
+  
+  R <- t(I - L) %*% (I - L)
+  
+  RSS_g <- as.numeric(t(y) %*% R %*% y)
+  
+  delta_1 <- sum(diag(R))
+  
+  # Match GWmodel source code
+  delta_2 <- 0
+  sigma_hat_sq <- RSS_g / delta_1
+  denominator_df <- Inf
+  
+  F3_result <- data.frame(
+    coefficient = colnames(X),
+    V_k_sq = NA_real_,
+    gamma_1 = NA_real_,
+    gamma_2 = NA_real_,
+    F3 = NA_real_,
+    numerator_df = NA_real_,
+    denominator_df = denominator_df,
+    p_value = NA_real_
+  )
+  
+  for(k in seq_len(p)){
+    beta_hat_k <- matrix(beta_mat[, k], ncol = 1)
+    
+    B <- B_list[[k]]
+    
+    V_k_sq <- as.numeric(
+      t(beta_hat_k) %*% C %*% beta_hat_k / n
+    )
+    
+    G <- t(B) %*% C %*% B / n
+    
+    gamma_1 <- sum(diag(G))
+    
+    # Match GWmodel source code
+    gamma_2 <- sum(diag(G)^2)
+    
+    numerator_df <- gamma_1^2 / gamma_2
+    
+    F3_k <- (V_k_sq / gamma_1) / sigma_hat_sq
+    
+    p_value <- pf(
+      F3_k,
+      df1 = numerator_df,
+      df2 = denominator_df,
+      lower.tail = FALSE
+    )
+    
+    F3_result$V_k_sq[k] <- V_k_sq
+    F3_result$gamma_1[k] <- gamma_1
+    F3_result$gamma_2[k] <- gamma_2
+    F3_result$F3[k] <- F3_k
+    F3_result$numerator_df[k] <- numerator_df
+    F3_result$p_value[k] <- p_value
+  }
+  
+  return(list(
+    table = F3_result,
+    RSS_g = RSS_g,
+    delta_1 = delta_1,
+    delta_2 = delta_2,
+    sigma_hat_sq = sigma_hat_sq,
+    denominator_df = denominator_df
+  ))
+}
+
 # ---------- main GWR estimation functions ----------
 gwr_grid <- function(X, y, obs, grid, bw, F3=FALSE){
   m <- nrow(grid)
@@ -187,8 +262,8 @@ gwr_grid <- function(X, y, obs, grid, bw, F3=FALSE){
   }
   
   # ----- standard deviation of each coefficient -----
-  coef_sd <- numeric(k)
-  for (i in 1:k){
+  coef_sd <- numeric(p)
+  for (i in seq_len(p)){
     beta_bar <- mean(beta_mat[, i])
     
     ss <- 0
@@ -214,7 +289,7 @@ gwr_grid <- function(X, y, obs, grid, bw, F3=FALSE){
   
   # ----- Leung F3 results -----
   if(F3){
-    output$F3 <- calc_leung_f3(X=X, y=y, beta_mat=beta_mat, B_list=B_list, L=L)
+    output$F3 <- calc_leung_f3_package(X=X, y=y, beta_mat=beta_mat, B_list=B_list, L=L)
   }
   
   # ----- output -----
@@ -360,7 +435,7 @@ select_bw_gcv <- function(X, y, obs, bw_candidates){
 # ============================================================
 mc_per <- function(X, y, obs, bw, sims, seed=123){
   set.seed(seed)
-  sd_ori <- gwr_grid(X=X, y=y, obs=obs, grid=obs, bw)$coef_sd
+  sd_ori <- gwr_grid(X=X, y=y, obs=obs, grid=obs, bw=bw)$coef_sd
   k <- length(sd_ori)
   
   # whether simulation std. is larger than original std.
@@ -376,7 +451,7 @@ mc_per <- function(X, y, obs, bw, sims, seed=123){
     obs_rand <- obs[sample(1:nrow(obs)), ]
     
     # std. of randomized beta
-    sd_rand <- gwr_grid(X=X, y=y, obs=obs_rand, grid=obs_rand, bw)$coef_sd
+    sd_rand <- gwr_grid(X=X, y=y, obs=obs_rand, grid=obs_rand, bw=bw)$coef_sd
     sd_rand_mat[i, ] <- sd_rand
   }
   
@@ -407,17 +482,18 @@ grid_xy <- matrix(
   ncol = 2
 )
 
-bw_candidates <- seq(140, 158, by=1)
+bw_candidates <- seq(130, 155, by=1)
 bw_aicc <- select_bw_aicc(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
-bw_cv <- select_bw_cv(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
-bw_gcv <- select_bw_gcv(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
+# bw_cv <- select_bw_cv(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
+# bw_gcv <- select_bw_gcv(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
 
 # -------------------- run --------------------
 gwr_result <- gwr_grid(X=X, y=y, obs=obs_xy, grid=grid_xy, bw=bw_aicc)
 names(gwr_result$coef_estimates)
 head(gwr_result$coef_estimates)
 
-p_value_mc <- mc_per(X=X, y=y, obs=obs_xy, bw=bw, sims=1000)
+leung_f3 <- gwr_grid(X=X, y=y, obs=obs_xy, grid=obs_xy, bw=bw_aicc, F3=TRUE)$F3$table
+p_value_mc <- mc_per(X=X, y=y, obs=obs_xy, bw=bw_aicc, sims=1000)
 p_value_mc
 
 # ========== compare with GWmodel (must run package version first) ==========
