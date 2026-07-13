@@ -66,25 +66,127 @@ local_lwr <- function(X, y, w){
   return (beta_hat)
 }
 
+calc_leung_f3 <- function(X, y, beta_mat, B_list, L){
+  n <- nrow(X)
+  p <- ncol(X)
+  
+  # I: n*n identity mat, J: n*n matrix of 1, L: GWR hat matrix
+  I <- diag(n)
+  J <- matrix(1, nrow=n, ncol=n)
+  C <- I - J/n
+
+  # equation (17)RSS_g (20)delta_1 (21)sigma_hat_square (23)delta_2 
+  R <- t(I - L) %*% (I - L)
+  RSS_g <- as.numeric(t(y) %*% R %*% y)
+  delta_1 <- sum(diag(R))
+  delta_2 <- sum(diag(R %*% R))
+  sigma_hat_sq <- RSS_g / delta_1
+  denominator_df <- delta_1^2 / delta_2
+  
+  # F3 output table
+  F3_result <- data.frame(
+    coefficient = colnames(X),
+    V_k_sq = NA,
+    gamma_1 = NA,
+    gamma_2 = NA,
+    F3 = NA,
+    numerator_df = NA,
+    denominator_df = denominator_df,
+    p_value = NA
+  )
+  
+  # compute F3(k) for each coefficient k
+  for(k in seq_len(p)){
+    beta_hat_k <- matrix(beta_mat[, k], ncol=1)
+    
+    # equation (62)B
+    B <- B_list[[k]]
+    
+    # equation (56)V_k^2
+    V_k_sq <- as.numeric(t(beta_hat_k) %*% C %*% beta_hat_k / n)
+    
+    # equation (64)gamma_i
+    G <- t(B) %*% C %*% B / n
+    gamma_1 <- sum(diag(G))
+    gamma_2 <- sum(diag(G %*% G))
+    
+    numerator_df <- gamma_1^2 / gamma_2
+    
+    # equation (65)F3(k)
+    F3_k <- (V_k_sq / gamma_1) / sigma_hat_sq
+    
+    p_value <- pf(F3_k, numerator_df, denominator_df, lower.tail=FALSE)
+    
+    F3_result$V_k_sq[k] <- V_k_sq
+    F3_result$gamma_1[k] <- gamma_1
+    F3_result$gamma_2[k] <- gamma_2
+    F3_result$F3[k] <- F3_k
+    F3_result$numerator_df[k] <- numerator_df
+    F3_result$p_value[k] <- p_value
+  }
+  
+  return(list(
+    table = F3_result,
+    RSS_g = RSS_g,
+    delta_1 = delta_1,
+    delta_2 = delta_2,
+    sigma_hat_sq = sigma_hat_sq,
+    denominator_df = denominator_df
+  ))
+}
+
 # ---------- main GWR estimation functions ----------
-gwr_grid <- function(X, y, obs, grid, bw){
+gwr_grid <- function(X, y, obs, grid, bw, F3=FALSE){
   m <- nrow(grid)
-  k <- ncol(X)
+  n <- nrow(obs)
+  p <- ncol(X)
   
   # distance matrix, coefficient matrix
   D <- calc_distance_matrix(grid, obs)
-  beta_mat <- matrix(NA, nrow = m, ncol = k)
+  beta_mat <- matrix(NA, nrow = m, ncol = p)
   colnames(beta_mat) <- colnames(X)
   
+  # ----- F3 initialization (requires obs = grid) -----
+  if(F3){
+    if(m!=n || !isTRUE(all.equal(obs, grid))){
+      stop("Leung F3 test requires grid to be same as observation points")
+    }
+    
+    # eq. (14) hat matrix L
+    L <- matrix(NA, nrow=n, ncol=n)
+    
+    # B matrix for each coefficient k
+    B_list <- vector(mode="list", length=p)
+    names(B_list) <- colnames(X)
+    
+    for(k in seq_len(p)){
+      B_list[[k]] <- matrix(NA, nrow=n, ncol=n)
+    }
+  }
+  
+  # ----- GWR estimation -----
   # loop over each regression point
   for (i in 1:m){
     w_i <- bisquare_adaptive_weight(D[i,], bw)
-    beta_i <- local_lwr(X, y, w_i)
+    W_i <- diag(as.vector(w_i))
+    C_i <- solve(t(X) %*% W_i %*% X) %*% t(X) %*% W_i
+    
+    beta_i <- C_i %*% y
     
     beta_mat[i, ] <- as.vector(beta_i)
+    
+    if(F3){
+      # eq. (16) row i of L
+      L[i, ] <- X[i, , drop=FALSE] %*% C_i
+      
+      # eq. (62) row i of B of each coefficient
+      for(k in seq_len(p)){
+        B_list[[k]][i, ] <- C_i[k, ]
+      }
+    }
   }
   
-  # standard deviation of each coefficient
+  # ----- standard deviation of each coefficient -----
   coef_sd <- numeric(k)
   for (i in 1:k){
     beta_bar <- mean(beta_mat[, i])
@@ -97,18 +199,26 @@ gwr_grid <- function(X, y, obs, grid, bw){
   }
   names(coef_sd) <- colnames(X)
   
-  # combine grid & coefficient
-  result <- data.frame(
+  # ----- combine grid & coefficient -----
+  coef_estimates <- data.frame(
     id = 1:m,
     x_coord = grid[, 1],
     y_coord = grid[, 2],
     beta_mat
   )
   
-  return(list(
-    coef_estimates = result,
+  output <- list(
+    coef_estimates = coef_estimates,
     coef_sd = coef_sd
-  ))
+  )
+  
+  # ----- Leung F3 results -----
+  if(F3){
+    output$F3 <- calc_leung_f3(X=X, y=y, beta_mat=beta_mat, B_list=B_list, L=L)
+  }
+  
+  # ----- output -----
+  return(output)
 }
 
 # ============================================================
@@ -221,9 +331,28 @@ calc_gwr_gcv <- function(X, y, obs, bw){
     s_i <- X[i, ,drop=FALSE] %*% solve(t(X) %*% W_i %*% X) %*% t(X) %*% W_i # row i of S
     tr_S <- tr_S + s_i[1, i]
   }
-  gcv <- n * (as.vector(y) - y_hat)^2 / (n - tr_S)^2
+  gcv <- n * sum((as.vector(y) - y_hat)^2) / (n - tr_S)^2
   
   return(gcv)
+}
+
+select_bw_gcv <- function(X, y, obs, bw_candidates){
+  gcv_table <- data.frame(
+    bw = bw_candidates,
+    gcv = NA
+  )
+  for(k in seq_along(bw_candidates)){
+    bw_k <- bw_candidates[k]
+    gcv_k <- calc_gwr_gcv(X=X, y=y, obs=obs, bw=bw_k)
+    gcv_table$gcv[k] <- gcv_k
+  }
+  
+  min_gcv <- gcv_table[which.min(gcv_table$gcv), ]
+  
+  return(list(
+    all_results = gcv_table,
+    best = min_gcv
+  ))
 }
 
 # ============================================================
@@ -278,13 +407,13 @@ grid_xy <- matrix(
   ncol = 2
 )
 
-bw_candidates <- seq(130, 145, by=1)
+bw_candidates <- seq(140, 158, by=1)
 bw_aicc <- select_bw_aicc(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
 bw_cv <- select_bw_cv(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
+bw_gcv <- select_bw_gcv(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
 
-
-# run
-gwr_result <- gwr_grid(X=X, y=y, obs=obs_xy, grid=grid_xy, bw=bw)
+# -------------------- run --------------------
+gwr_result <- gwr_grid(X=X, y=y, obs=obs_xy, grid=grid_xy, bw=bw_aicc)
 names(gwr_result$coef_estimates)
 head(gwr_result$coef_estimates)
 
@@ -292,16 +421,16 @@ p_value_mc <- mc_per(X=X, y=y, obs=obs_xy, bw=bw, sims=1000)
 p_value_mc
 
 # ========== compare with GWmodel (must run package version first) ==========
-coef_names <- c(
-  "Intercept",
-  "PctRural",
-  "PctEld",
-  "PctFB",
-  "PctPov",
-  "PctBlack"
-)
-
-diff_result <- gwr_result$coef_estimates[, coef_names] - grid_basic_estimates[, coef_names]
-head(diff_result)
-summary(diff_result)
-max(abs(as.matrix(diff_result)))
+# coef_names <- c(
+#   "Intercept",
+#   "PctRural",
+#   "PctEld",
+#   "PctFB",
+#   "PctPov",
+#   "PctBlack"
+# )
+# 
+# diff_result <- gwr_result$coef_estimates[, coef_names] - grid_basic_estimates[, coef_names]
+# head(diff_result)
+# summary(diff_result)
+# max(abs(as.matrix(diff_result)))

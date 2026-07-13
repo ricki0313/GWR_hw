@@ -38,7 +38,6 @@ bw_aicc <- bw.gwr(
 )
 bw_aicc
 
-
 # fit model with the best bandwidth
 x_seq <- seq(
   from = min(georgia_spdf$X),
@@ -97,3 +96,10 @@ mc <- gwr.montecarlo(formula=formula_gwr,
                      kernel="bisquare",
                      adaptive=TRUE,
                      bw=bw_aicc)
+
+ftest <- gwr.basic(formula=formula_gwr,
+                   data=georgia_spdf,
+                   bw=bw_aicc,
+                   kernel="bisquare",
+                   adaptive=TRUE,
+                   F123.test=TRUE)
