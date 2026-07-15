@@ -493,6 +493,7 @@ names(gwr_result$coef_estimates)
 head(gwr_result$coef_estimates)
 
 leung_f3 <- gwr_grid(X=X, y=y, obs=obs_xy, grid=obs_xy, bw=bw_aicc, F3=TRUE)$F3$table
+leung_f3
 p_value_mc <- mc_per(X=X, y=y, obs=obs_xy, bw=bw_aicc, sims=1000)
 p_value_mc
 

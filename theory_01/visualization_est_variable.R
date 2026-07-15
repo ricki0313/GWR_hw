@@ -29,7 +29,7 @@ grid_points <- SpatialPoints(
 # 點落在州界內，使用該郡的屬性資料，點落在州界外，結果是NA
 inside <- !is.na(over(grid_points, Gedu.counties)[, 1])
 
-# 建立含有100種顏色的色階
+# 建立含有 6 種顏色的色階
 pal <- heat.colors(6)
 
 # 儲存原繪圖參數，避免程式執行後永久改變R的繪圖設定
@@ -55,7 +55,7 @@ for (coef_name in coef_names) {
     ncol = length(y_unique)
   )
   
-  # 取得該系數最小值與最大值，切成100顏色區間
+  # 取得該系數最小值與最大值，切成 6 顏色區間
   z_range <- range(z_masked, na.rm = TRUE)
   breaks <- seq(z_range[1], z_range[2], length.out = length(pal) + 1)
   
