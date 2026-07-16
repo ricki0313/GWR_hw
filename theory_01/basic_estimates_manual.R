@@ -289,7 +289,7 @@ gwr_grid <- function(X, y, obs, grid, bw, F3=FALSE){
   
   # ----- Leung F3 results -----
   if(F3){
-    output$F3 <- calc_leung_f3_package(X=X, y=y, beta_mat=beta_mat, B_list=B_list, L=L)
+    output$F3 <- calc_leung_f3(X=X, y=y, beta_mat=beta_mat, B_list=B_list, L=L)
   }
   
   # ----- output -----
