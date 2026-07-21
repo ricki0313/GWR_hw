@@ -1,5 +1,4 @@
 library(GWmodel)
-
 data(Georgia)
 names(Gedu.df)
 head(Gedu.df)
@@ -488,26 +487,37 @@ bw_aicc <- select_bw_aicc(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$bes
 # bw_gcv <- select_bw_gcv(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
 
 # -------------------- run --------------------
-gwr_result <- gwr_grid(X=X, y=y, obs=obs_xy, grid=grid_xy, bw=bw_aicc)
+# fit model (regression points = data points)
+gwr_result <- gwr_grid(X=X, y=y, obs=obs_xy, grid=obs_xy, bw=bw_aicc)
 names(gwr_result$coef_estimates)
 head(gwr_result$coef_estimates)
+nrow(gwr_result$coef_estimates)
 
-leung_f3 <- gwr_grid(X=X, y=y, obs=obs_xy, grid=obs_xy, bw=bw_aicc, F3=TRUE)$F3$table
-leung_f3
+# # fit model (40* 40 grid regression points)
+# gwr_grid_result <- gwr_grid(X=X, y=y, obs=obs_xy, grid=grid_xy, bw=bw_aicc)
+# names(gwr_grid_result$coef_estimates)
+# head(gwr_grid_result$coef_estimates)
+# nrow(gwr_grid_result$coef_estimates)
+
+# MC permutation test
 p_value_mc <- mc_per(X=X, y=y, obs=obs_xy, bw=bw_aicc, sims=1000)
 p_value_mc
 
+# Leung f3 test
+leung_f3 <- gwr_grid(X=X, y=y, obs=obs_xy, grid=obs_xy, bw=bw_aicc, F3=TRUE)$F3$table
+leung_f3
+
 # ========== compare with GWmodel (must run package version first) ==========
-# coef_names <- c(
-#   "Intercept",
-#   "PctRural",
-#   "PctEld",
-#   "PctFB",
-#   "PctPov",
-#   "PctBlack"
-# )
-# 
-# diff_result <- gwr_result$coef_estimates[, coef_names] - grid_basic_estimates[, coef_names]
-# head(diff_result)
-# summary(diff_result)
-# max(abs(as.matrix(diff_result)))
+coef_names <- c(
+  "Intercept",
+  "PctRural",
+  "PctEld",
+  "PctFB",
+  "PctPov",
+  "PctBlack"
+)
+
+diff_result <- gwr_result$coef_estimates[, coef_names] - basic_estimates[, coef_names]
+head(diff_result)
+summary(diff_result)
+max(abs(as.matrix(diff_result)))
