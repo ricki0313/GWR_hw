@@ -65,6 +65,336 @@ local_lwr <- function(X, y, w){
   return (beta_hat)
 }
 
+# ---------- main GWR estimation functions ----------
+gwr_grid <- function(X, y, obs, grid, bw, F3=FALSE){
+  m <- nrow(grid)
+  n <- nrow(obs)
+  p <- ncol(X)
+  
+  # distance matrix, coefficient matrix
+  D <- calc_distance_matrix(grid, obs)
+  beta_mat <- matrix(NA, nrow = m, ncol = p)
+  colnames(beta_mat) <- colnames(X)
+  
+  # ----- F3 initialization (requires obs = grid) -----
+  if(F3){
+    if(m!=n || !isTRUE(all.equal(obs, grid))){
+      stop("Leung F3 test requires grid to be same as observation points")
+    }
+    
+    # eq. (14) hat matrix L
+    L <- matrix(NA, nrow=n, ncol=n)
+    
+    # B matrix for each coefficient k
+    B_list <- vector(mode="list", length=p)
+    names(B_list) <- colnames(X)
+    
+    for(k in seq_len(p)){
+      B_list[[k]] <- matrix(NA, nrow=n, ncol=n)
+    }
+  }
+  
+  # ----- GWR estimation -----
+  # loop over each regression point
+  for (i in 1:m){
+    w_i <- bisquare_adaptive_weight(D[i,], bw)
+    W_i <- diag(as.vector(w_i))
+    C_i <- solve(t(X) %*% W_i %*% X) %*% t(X) %*% W_i
+    
+    beta_i <- C_i %*% y
+    
+    beta_mat[i, ] <- as.vector(beta_i)
+    
+    if(F3){
+      # eq. (16) row i of L
+      L[i, ] <- X[i, , drop=FALSE] %*% C_i
+      
+      # eq. (62) row i of B of each coefficient
+      for(k in seq_len(p)){
+        B_list[[k]][i, ] <- C_i[k, ]
+      }
+    }
+  }
+  
+  # ----- standard deviation of each coefficient -----
+  coef_sd <- numeric(p)
+  for (i in seq_len(p)){
+    beta_bar <- mean(beta_mat[, i])
+    
+    ss <- 0
+    for (j in 1:m){
+      ss <- ss + (beta_mat[j, i] - beta_bar)^2
+    }
+    coef_sd[i] <- sqrt(ss / (m - 1))
+  }
+  names(coef_sd) <- colnames(X)
+  
+  # ----- combine grid & coefficient -----
+  coef_estimates <- data.frame(
+    id = 1:m,
+    x_coord = grid[, 1],
+    y_coord = grid[, 2],
+    beta_mat
+  )
+  
+  output <- list(
+    coef_estimates = coef_estimates,
+    coef_sd = coef_sd
+  )
+  
+  # ----- Leung F3 results -----
+  if(F3){
+    output$F3 <- calc_leung_f3(X=X, y=y, beta_mat=beta_mat, B_list=B_list, L=L)
+  }
+  
+  # ----- output -----
+  return(output)
+}
+
+# ============================================================
+# Bandwidth selection
+# ============================================================
+# ---------- aicc ----------
+calc_gwr_aicc <- function(X, y, obs, bw){
+  D <- calc_distance_matrix(obs, obs)
+  
+  n <- nrow(X)
+  y_hat <- numeric(n)
+  tr_S <- 0
+  for (i in 1:n){
+    # y_hat
+    w_i <- bisquare_adaptive_weight(D[i, ], bw)
+    beta_i <- local_lwr(X, y, w_i)
+    y_hat[i] <- X[i, ,drop=FALSE] %*% beta_i
+    
+    # trace(S)
+    W_i <- diag(as.vector(w_i))
+    s_i <- X[i, ,drop=FALSE] %*% solve(t(X) %*% W_i %*% X) %*% t(X) %*% W_i # row i of S
+    tr_S <- tr_S + s_i[1, i]
+  }
+  
+  # sigma_hat for AICc
+  res <- as.vector(y) - y_hat
+  RSS <- sum(res^2)
+  sigma_hat <- sqrt(RSS / n)
+  
+  # AICc
+  aicc <- 2*n*log(sigma_hat) + n*log(2 * pi) + n*((n + tr_S)/(n - 2 - tr_S))
+  return(aicc)
+}
+
+select_bw_aicc <- function(X, y, obs, bw_candidates){
+  aicc_table <- data.frame(
+    bw = bw_candidates,
+    aicc = NA
+  )
+  
+  for (k in 1:length(bw_candidates)){
+    bw_k <- bw_candidates[k]
+    result_k <- calc_gwr_aicc(X=X, y=y, obs=obs, bw=bw_k)
+    
+    aicc_table$aicc[k] <- result_k
+  }
+  
+  min_aicc <- aicc_table[which.min(aicc_table$aicc), ]
+  
+  return(list(
+    all_results = aicc_table,
+    best = min_aicc
+  ))
+}
+# ---------- cv ----------
+calc_gwr_cv <- function(X, y, obs, bw){
+  D <- calc_distance_matrix(obs, obs)
+  n <- nrow(X)
+  y_hat <- numeric(n)
+  for(i in 1:n){
+    w_i <- bisquare_adaptive_weight(D[i, ], bw)
+    
+    # leave one out
+    w_i[i] <- 0
+    
+    # fit
+    beta_i <- local_lwr(X, y, w_i)
+    y_hat[i] <- X[i, ,drop=FALSE] %*% beta_i
+  }
+  cv <- sum((as.vector(y) - y_hat)^2)
+  
+  return(cv)
+}
+
+select_bw_cv <- function(X, y, obs, bw_candidates){
+  cv_table <- data.frame(
+    bw = bw_candidates,
+    cv = NA
+  )
+  for (k in seq_along(bw_candidates)){
+    bw_k <- bw_candidates[k]
+    cv_k <- calc_gwr_cv(X=X, y=y, obs=obs, bw=bw_k)
+    cv_table$cv[k] <- cv_k
+  }
+  
+  min_cv <- cv_table[which.min(cv_table$cv), ]
+  
+  return(list(
+    all_results = cv_table,
+    best = min_cv
+  ))
+}
+
+# ---------- gcv ----------
+calc_gwr_gcv <- function(X, y, obs, bw){
+  D <- calc_distance_matrix(obs, obs)
+  
+  n <- nrow(X)
+  y_hat <- numeric(n)
+  tr_S <- 0
+  for (i in 1:n){
+    # y_hat
+    w_i <- bisquare_adaptive_weight(D[i, ], bw)
+    beta_i <- local_lwr(X, y, w_i)
+    y_hat[i] <- X[i, ,drop=FALSE] %*% beta_i
+    
+    # trace(S)
+    W_i <- diag(as.vector(w_i))
+    s_i <- X[i, ,drop=FALSE] %*% solve(t(X) %*% W_i %*% X) %*% t(X) %*% W_i # row i of S
+    tr_S <- tr_S + s_i[1, i]
+  }
+  gcv <- n * sum((as.vector(y) - y_hat)^2) / (n - tr_S)^2
+  
+  return(gcv)
+}
+
+select_bw_gcv <- function(X, y, obs, bw_candidates){
+  gcv_table <- data.frame(
+    bw = bw_candidates,
+    gcv = NA
+  )
+  for(k in seq_along(bw_candidates)){
+    bw_k <- bw_candidates[k]
+    gcv_k <- calc_gwr_gcv(X=X, y=y, obs=obs, bw=bw_k)
+    gcv_table$gcv[k] <- gcv_k
+  }
+  
+  min_gcv <- gcv_table[which.min(gcv_table$gcv), ]
+  
+  return(list(
+    all_results = gcv_table,
+    best = min_gcv
+  ))
+}
+
+# ---------- golden section search for aicc & cv ----------
+golden_search <- function(f, a, c , adaptive=FALSE,
+                          error=1e-4, 
+                          max_iter=1000){
+  if(a >= c){
+    stop("a must be smaller than c")
+  }
+  
+  rho <- (sqrt(5) - 1) / 2
+  
+  # initial golden section points
+  d <- (c - a)*rho
+  
+  if(adaptive){
+    x1 <- round(c - d)
+    x2 <- round(a + d)
+  }else{
+    x1 <- c - d
+    x2 <- a + d
+  }
+  
+  f1 <- f(x1)
+  f2 <- f(x2)
+  
+  # difference between 2 objective points
+  d1 <- f2 - f1
+  
+  iter <- 0
+  while(abs(d) > error &&
+        abs(d1)> error &&
+        iter < max_iter){
+    d <- rho * d
+    
+    if(f1 < f2){
+      c <- x2
+      
+      x2 <- x1
+      f2 <- f1
+      
+      if(adaptive){x1 <- round(c - d)}else{x1 <- c - d}
+      f1 <- f(x1)
+      
+    }else{
+      a <- x1
+      
+      x1 <- x2
+      f1 <- f2
+      
+      if(adaptive){x2 <- round(a + d)}else{x2 <- a + d}
+      f2 <- f(x2)
+    }
+    
+    d1 <- f2 - f1
+    iter <- iter + 1
+  }
+  
+  if(adaptive){
+    bw_canditate <- seq(from=ceiling(a), to=floor(c), by=1)
+    value <- sapply(bw_canditate, f)
+    min_id <- which.min(value)
+    
+    xmin <- bw_canditate[min_id]
+    fmin <- value[min_id]
+  }else{
+    if(f1 < f2){
+      xmin <- x1
+      fmin <- f1
+    }else{
+      xmin <- x2
+      fmin <- f2
+    }
+  }
+  
+  list(
+    min = xmin,
+    value = fmin,
+    interval = c(a,c),
+    iter = iter
+  )
+}
+# ============================================================
+# Test for spatial non-stationary
+# ============================================================
+mc_per <- function(X, y, obs, bw, sims, seed=123){
+  set.seed(seed)
+  sd_ori <- gwr_grid(X=X, y=y, obs=obs, grid=obs, bw=bw)$coef_sd
+  k <- length(sd_ori)
+  
+  # whether simulation std. is larger than original std.
+  larger_than_ori <- matrix(NA, nrow=sims, ncol=k)
+  colnames(larger_than_ori) <- names(sd_ori) 
+  
+  # std. of random location beta
+  sd_rand_mat <- matrix(NA, nrow=sims, ncol=k)
+  colnames(sd_rand_mat) <- names(sd_ori)
+  
+  for (i in 1:sims){
+    # permutation
+    obs_rand <- obs[sample(1:nrow(obs)), ]
+    
+    # std. of randomized beta
+    sd_rand <- gwr_grid(X=X, y=y, obs=obs_rand, grid=obs_rand, bw=bw)$coef_sd
+    sd_rand_mat[i, ] <- sd_rand
+  }
+  
+  # calculate p-value
+  pv <- colMeans(sd_rand_mat >= matrix(sd_ori, nrow=sims, ncol=k, byrow=TRUE))
+  
+  return(pv)
+}
+
 calc_leung_f3 <- function(X, y, beta_mat, B_list, L){
   n <- nrow(X)
   p <- ncol(X)
@@ -73,7 +403,7 @@ calc_leung_f3 <- function(X, y, beta_mat, B_list, L){
   I <- diag(n)
   J <- matrix(1, nrow=n, ncol=n)
   C <- I - J/n
-
+  
   # equation (17)RSS_g (20)delta_1 (21)sigma_hat_square (23)delta_2 
   R <- t(I - L) %*% (I - L)
   RSS_g <- as.numeric(t(y) %*% R %*% y)
@@ -208,258 +538,6 @@ calc_leung_f3_package <- function(X, y, beta_mat, B_list, L){
     denominator_df = denominator_df
   ))
 }
-
-# ---------- main GWR estimation functions ----------
-gwr_grid <- function(X, y, obs, grid, bw, F3=FALSE){
-  m <- nrow(grid)
-  n <- nrow(obs)
-  p <- ncol(X)
-  
-  # distance matrix, coefficient matrix
-  D <- calc_distance_matrix(grid, obs)
-  beta_mat <- matrix(NA, nrow = m, ncol = p)
-  colnames(beta_mat) <- colnames(X)
-  
-  # ----- F3 initialization (requires obs = grid) -----
-  if(F3){
-    if(m!=n || !isTRUE(all.equal(obs, grid))){
-      stop("Leung F3 test requires grid to be same as observation points")
-    }
-    
-    # eq. (14) hat matrix L
-    L <- matrix(NA, nrow=n, ncol=n)
-    
-    # B matrix for each coefficient k
-    B_list <- vector(mode="list", length=p)
-    names(B_list) <- colnames(X)
-    
-    for(k in seq_len(p)){
-      B_list[[k]] <- matrix(NA, nrow=n, ncol=n)
-    }
-  }
-  
-  # ----- GWR estimation -----
-  # loop over each regression point
-  for (i in 1:m){
-    w_i <- bisquare_adaptive_weight(D[i,], bw)
-    W_i <- diag(as.vector(w_i))
-    C_i <- solve(t(X) %*% W_i %*% X) %*% t(X) %*% W_i
-    
-    beta_i <- C_i %*% y
-    
-    beta_mat[i, ] <- as.vector(beta_i)
-    
-    if(F3){
-      # eq. (16) row i of L
-      L[i, ] <- X[i, , drop=FALSE] %*% C_i
-      
-      # eq. (62) row i of B of each coefficient
-      for(k in seq_len(p)){
-        B_list[[k]][i, ] <- C_i[k, ]
-      }
-    }
-  }
-  
-  # ----- standard deviation of each coefficient -----
-  coef_sd <- numeric(p)
-  for (i in seq_len(p)){
-    beta_bar <- mean(beta_mat[, i])
-    
-    ss <- 0
-    for (j in 1:m){
-      ss <- ss + (beta_mat[j, i] - beta_bar)^2
-    }
-    coef_sd[i] <- sqrt(ss / (m - 1))
-  }
-  names(coef_sd) <- colnames(X)
-  
-  # ----- combine grid & coefficient -----
-  coef_estimates <- data.frame(
-    id = 1:m,
-    x_coord = grid[, 1],
-    y_coord = grid[, 2],
-    beta_mat
-  )
-  
-  output <- list(
-    coef_estimates = coef_estimates,
-    coef_sd = coef_sd
-  )
-  
-  # ----- Leung F3 results -----
-  if(F3){
-    output$F3 <- calc_leung_f3(X=X, y=y, beta_mat=beta_mat, B_list=B_list, L=L)
-  }
-  
-  # ----- output -----
-  return(output)
-}
-
-# ============================================================
-# bandwidth selection
-# ============================================================
-# ---------- aicc ----------
-calc_gwr_aicc <- function(X, y, obs, bw){
-  D <- calc_distance_matrix(obs, obs)
-  
-  n <- nrow(X)
-  y_hat <- numeric(n)
-  tr_S <- 0
-  for (i in 1:n){
-    # y_hat
-    w_i <- bisquare_adaptive_weight(D[i, ], bw)
-    beta_i <- local_lwr(X, y, w_i)
-    y_hat[i] <- X[i, ,drop=FALSE] %*% beta_i
-    
-    # trace(S)
-    W_i <- diag(as.vector(w_i))
-    s_i <- X[i, ,drop=FALSE] %*% solve(t(X) %*% W_i %*% X) %*% t(X) %*% W_i # row i of S
-    tr_S <- tr_S + s_i[1, i]
-  }
-  
-  # sigma_hat for AICc
-  res <- as.vector(y) - y_hat
-  RSS <- sum(res^2)
-  sigma_hat <- sqrt(RSS / n)
-  
-  # AICc
-  aicc <- 2*n*log(sigma_hat) + n*log(2 * pi) + n*((n + tr_S)/(n - 2 - tr_S))
-  return(aicc)
-}
-
-select_bw_aicc <- function(X, y, obs, bw_candidates){
-  aicc_table <- data.frame(
-    bw = bw_candidates,
-    aicc = NA
-  )
-  
-  for (k in 1:length(bw_candidates)){
-    bw_k <- bw_candidates[k]
-    result_k <- calc_gwr_aicc(X=X, y=y, obs=obs, bw=bw_k)
-    
-    aicc_table$aicc[k] <- result_k
-  }
-  
-  min_aicc <- aicc_table[which.min(aicc_table$aicc), ]
-  
-  return(list(
-    all_results = aicc_table,
-    best = min_aicc
-  ))
-}
-
-# ---------- cv ----------
-calc_gwr_cv <- function(X, y, obs, bw){
-  D <- calc_distance_matrix(obs, obs)
-  n <- nrow(X)
-  y_hat <- numeric(n)
-  for(i in 1:n){
-    w_i <- bisquare_adaptive_weight(D[i, ], bw)
-    
-    # leave one out
-    w_i[i] <- 0
-    
-    # fit
-    beta_i <- local_lwr(X, y, w_i)
-    y_hat[i] <- X[i, ,drop=FALSE] %*% beta_i
-  }
-  cv <- sum((as.vector(y) - y_hat)^2)
-  
-  return(cv)
-}
-
-select_bw_cv <- function(X, y, obs, bw_candidates){
-  cv_table <- data.frame(
-    bw = bw_candidates,
-    cv = NA
-  )
-  for (k in seq_along(bw_candidates)){
-    bw_k <- bw_candidates[k]
-    cv_k <- calc_gwr_cv(X=X, y=y, obs=obs, bw=bw_k)
-    cv_table$cv[k] <- cv_k
-  }
-  
-  min_cv <- cv_table[which.min(cv_table$cv), ]
-  
-  return(list(
-    all_results = cv_table,
-    best = min_cv
-  ))
-}
-
-# ---------- gcv ----------
-calc_gwr_gcv <- function(X, y, obs, bw){
-  D <- calc_distance_matrix(obs, obs)
-  
-  n <- nrow(X)
-  y_hat <- numeric(n)
-  tr_S <- 0
-  for (i in 1:n){
-    # y_hat
-    w_i <- bisquare_adaptive_weight(D[i, ], bw)
-    beta_i <- local_lwr(X, y, w_i)
-    y_hat[i] <- X[i, ,drop=FALSE] %*% beta_i
-    
-    # trace(S)
-    W_i <- diag(as.vector(w_i))
-    s_i <- X[i, ,drop=FALSE] %*% solve(t(X) %*% W_i %*% X) %*% t(X) %*% W_i # row i of S
-    tr_S <- tr_S + s_i[1, i]
-  }
-  gcv <- n * sum((as.vector(y) - y_hat)^2) / (n - tr_S)^2
-  
-  return(gcv)
-}
-
-select_bw_gcv <- function(X, y, obs, bw_candidates){
-  gcv_table <- data.frame(
-    bw = bw_candidates,
-    gcv = NA
-  )
-  for(k in seq_along(bw_candidates)){
-    bw_k <- bw_candidates[k]
-    gcv_k <- calc_gwr_gcv(X=X, y=y, obs=obs, bw=bw_k)
-    gcv_table$gcv[k] <- gcv_k
-  }
-  
-  min_gcv <- gcv_table[which.min(gcv_table$gcv), ]
-  
-  return(list(
-    all_results = gcv_table,
-    best = min_gcv
-  ))
-}
-
-# ============================================================
-# Monte Carlo permutation test 
-# ============================================================
-mc_per <- function(X, y, obs, bw, sims, seed=123){
-  set.seed(seed)
-  sd_ori <- gwr_grid(X=X, y=y, obs=obs, grid=obs, bw=bw)$coef_sd
-  k <- length(sd_ori)
-  
-  # whether simulation std. is larger than original std.
-  larger_than_ori <- matrix(NA, nrow=sims, ncol=k)
-  colnames(larger_than_ori) <- names(sd_ori) 
-  
-  # std. of random location beta
-  sd_rand_mat <- matrix(NA, nrow=sims, ncol=k)
-  colnames(sd_rand_mat) <- names(sd_ori)
-  
-  for (i in 1:sims){
-    # permutation
-    obs_rand <- obs[sample(1:nrow(obs)), ]
-    
-    # std. of randomized beta
-    sd_rand <- gwr_grid(X=X, y=y, obs=obs_rand, grid=obs_rand, bw=bw)$coef_sd
-    sd_rand_mat[i, ] <- sd_rand
-  }
-  
-  # calculate p-value
-  pv <- colMeans(sd_rand_mat >= matrix(sd_ori, nrow=sims, ncol=k, byrow=TRUE))
-  
-  return(pv)
-}
-
 # ============================================================
 # main 
 # ============================================================
@@ -481,9 +559,20 @@ grid_xy <- matrix(
   ncol = 2
 )
 
-bw_candidates <- seq(130, 155, by=1)
-bw_aicc <- select_bw_aicc(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
-# bw_cv <- select_bw_cv(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
+# bandwidth selection (golden search for aicc & cv, brute force for gcv)
+# aicc
+aicc_func <- function(bw){
+  calc_gwr_aicc(X=X, y=y, obs=obs_xy, bw=bw)
+}
+bw_aicc <- golden_search(f=aicc_func, a=20, c=n, adaptive=TRUE)$min
+
+# cv
+cv_func <- function(bw){
+  calc_gwr_cv(X=X, y=y, obs=obs_xy, bw=bw)
+}
+bw_cv <- golden_search(f=cv_func, a=20, c=n, adaptive=TRUE)$min
+
+# gcv
 # bw_gcv <- select_bw_gcv(X=X, y=y, obs=obs_xy, bw_candidates=bw_candidates)$best$bw
 
 # -------------------- run --------------------
